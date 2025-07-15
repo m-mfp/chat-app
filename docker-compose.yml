@@ -1,0 +1,34 @@
+services:
+  db:
+    image: postgres:16
+    restart: always
+    environment:
+      POSTGRES_USER: chatuser
+      POSTGRES_PASSWORD: chatpassword
+      POSTGRES_DB: chatdb
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  server:
+    build: ./server
+    environment:
+      DB_HOST: db
+      DB_USER: chatuser
+      DB_PASSWORD: chatpassword
+      DB_NAME: chatdb
+    ports:
+      - "127.0.0.1:8000:8000"
+    depends_on:
+      - db
+
+  client:
+    build: ./client
+    ports:
+      - "127.0.0.1:3000:80"
+    stdin_open: true
+    tty: true
+
+volumes:
+  postgres_data:

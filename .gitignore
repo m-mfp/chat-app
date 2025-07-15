@@ -1,24 +1,2 @@
-# Node.js
-node_modules/
-dist/
-build/
-
-# Go
-*.exe
-*.exe~
-*.dll
-*.so
-*.dylib
-
-# Docker
-*.log
-docker-compose.yml.local
-
-# Environment variables
 .env
-*.env
-
-# Editor and OS files
-.vscode/
-.idea/
-*.DS_Store
+*.log
