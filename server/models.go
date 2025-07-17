@@ -8,7 +8,8 @@ import (
 
 type Message struct {
 	gorm.Model
-	Username  string
-	Content   string
+	UserID    string `json:"userid"`
+	MsgID     string `json:"msgid"`
+	Text      string `json:"text"`
 	CreatedAt time.Time
 }

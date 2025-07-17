@@ -1,3 +1,7 @@
+# Git and documentation
+.git
+*.md
+
 # Environment variables
 .env
 client/.env
