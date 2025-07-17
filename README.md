@@ -13,12 +13,6 @@ A real-time chat application showcasing full-stack development with React, Go, P
 - **Planned Authentication**: Auth0 JWT for user authentication (in progress).
 
 ### Running Locally
-1. Clone the repo:
-   ```bash
-   git clone https://github.com/your-username/your-repo.git
-   cd your-repo
-
-### Running Locally
 1. Clone the repo: `git clone https://github.com/m-mfp/chat-app`
 2. Run `docker-compose up --build` to start the server and database
 3. Create `client/.env` file `REACT_APP_API_URL=http://server:8000` and `server/.env` file
