@@ -2,14 +2,11 @@ package main
 
 import (
 	"time"
-
-	"gorm.io/gorm"
 )
 
 type Message struct {
-	gorm.Model
-	UserID    string `json:"userid"`
-	MsgID     string `json:"msgid"`
-	Text      string `json:"text"`
-	CreatedAt time.Time
+	UserID    string    `json:"userid" gorm:"type:varchar(100)"`
+	MsgID     string    `json:"msgid" gorm:"type:varchar(100);primaryKey"`
+	Text      string    `json:"text" gorm:"type:text"`
+	CreatedAt time.Time `json:"created_at"`
 }

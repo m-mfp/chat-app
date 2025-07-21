@@ -1,9 +1,11 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"math/rand"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/gin-contrib/cors"
@@ -12,10 +14,8 @@ import (
 	"golang.org/x/time/rate"
 )
 
-// WebSocket Manager and Client structs
 type Client struct {
 	Conn *websocket.Conn
-	Send chan []byte
 }
 
 type WebSocketManager struct {
@@ -32,22 +32,32 @@ var Manager = WebSocketManager{
 	Unregister: make(chan *Client),
 }
 
+var upgrader = websocket.Upgrader{
+	ReadBufferSize:  1024,
+	WriteBufferSize: 1024,
+	CheckOrigin: func(r *http.Request) bool {
+		fmt.Println("WebSocket origin:", r.Header.Get("Origin"))
+		return true // Restrict origins in production
+	},
+}
+
 func (manager *WebSocketManager) Start() {
 	for {
 		select {
 		case client := <-manager.Register:
 			manager.Clients[client] = true
+			fmt.Println("Client registered")
 		case client := <-manager.Unregister:
 			if _, ok := manager.Clients[client]; ok {
-				close(client.Send)
 				delete(manager.Clients, client)
+				fmt.Println("Client unregistered")
 			}
 		case message := <-manager.Broadcast:
 			for client := range manager.Clients {
-				select {
-				case client.Send <- message:
-				default:
-					close(client.Send)
+				err := client.Conn.WriteMessage(websocket.TextMessage, message)
+				if err != nil {
+					fmt.Println("Write error:", err)
+					client.Conn.Close()
 					delete(manager.Clients, client)
 				}
 			}
@@ -60,21 +70,26 @@ func main() {
 	DB.AutoMigrate(&Message{})
 	router := gin.Default()
 
-	// Start WebSocket manager
 	go Manager.Start()
 
-	// CORS configuration
 	config := cors.Config{
-		AllowOrigins:     []string{"http://localhost:3000", "http://client:80"},
+		AllowOriginFunc: func(origin string) bool {
+			return strings.HasPrefix(origin, "http://192.168.2.") || origin == "http://localhost:3000" || origin == "http://client:80"
+		},
 		AllowMethods:     []string{"GET", "POST", "OPTIONS"},
-		AllowHeaders:     []string{"Origin", "Content-Type", "Accept"},
+		AllowHeaders:     []string{"Origin", "Content-Type", "Accept", "Upgrade", "Connection"},
 		ExposeHeaders:    []string{"Content-Length"},
 		AllowCredentials: true,
 		MaxAge:           12 * time.Hour,
 	}
-	router.Use(cors.New(config))
 
-	router.Use(RateLimiter())
+	router.Use(func(c *gin.Context) {
+		if c.Request.URL.Path != "/ws" {
+			cors.New(config)(c)
+			RateLimiter()(c)
+		}
+		c.Next()
+	})
 
 	router.GET("/health", func(c *gin.Context) {
 		if err := DB.Exec("SELECT 1").Error; err != nil {
@@ -86,7 +101,6 @@ func main() {
 
 	router.POST("/api/messages", HandleMessages)
 
-	// WebSocket endpoint
 	router.GET("/ws", HandleWebSocket)
 
 	router.Run(":8000")
@@ -106,87 +120,29 @@ func RateLimiter() gin.HandlerFunc {
 }
 
 func HandleMessages(c *gin.Context) {
-	var input struct {
-		UserID string `json:"userid"`
-		MsgID  string `json:"msgid"`
-		Text   string `json:"text"`
-	}
-	if err := c.ShouldBindJSON(&input); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid JSON payload"})
+	var msg Message
+	if err := c.ShouldBindJSON(&msg); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-
-	msg := Message{
-		UserID: input.UserID,
-		MsgID:  input.MsgID,
-		Text:   input.Text,
-	}
-
-	tx := DB.Begin()
-	if err := tx.Create(&msg).Error; err != nil {
-		tx.Rollback()
+	if err := DB.Create(&msg).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to save message"})
 		return
 	}
-
-	var count int64
-	if err := tx.Model(&Message{}).Where("msg_id = ?", msg.MsgID).Count(&count).Error; err != nil {
-		tx.Rollback()
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to verify message"})
-		return
-	}
-	if count == 0 {
-		tx.Rollback()
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to save message"})
-		return
-	}
-
-	if err := tx.Commit().Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to commit message"})
-		return
-	}
-
-	// Broadcast the message to WebSocket clients
-	Manager.Broadcast <- []byte(msg.Text)
-
-	c.JSON(http.StatusAccepted, gin.H{
-		"status":  "message received",
-		"message": msg,
-	})
+	Manager.Broadcast <- []byte(fmt.Sprintf(`{"user":"%s","text":"%s"}`, msg.UserID, msg.Text))
+	c.Status(http.StatusNoContent)
 }
 
 func HandleWebSocket(c *gin.Context) {
-	upgrader := websocket.Upgrader{
-		ReadBufferSize:  1024,
-		WriteBufferSize: 1024,
-		CheckOrigin: func(r *http.Request) bool {
-			return true // Restrict origins in production
-		},
-	}
-
+	fmt.Println("WebSocket connection attempt from:", c.Request.RemoteAddr)
 	conn, err := upgrader.Upgrade(c.Writer, c.Request, nil)
 	if err != nil {
+		fmt.Println("WebSocket upgrade error:", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "WebSocket upgrade failed"})
 		return
 	}
-
-	client := &Client{Conn: conn, Send: make(chan []byte)}
+	client := &Client{Conn: conn}
 	Manager.Register <- client
-
-	// Handle sending messages to the client
-	go func() {
-		defer func() {
-			Manager.Unregister <- client
-			conn.Close()
-		}()
-		for message := range client.Send {
-			if err := conn.WriteMessage(websocket.TextMessage, message); err != nil {
-				return
-			}
-		}
-	}()
-
-	// Handle receiving messages from the client
 	go func() {
 		defer func() {
 			Manager.Unregister <- client
@@ -195,19 +151,27 @@ func HandleWebSocket(c *gin.Context) {
 		for {
 			_, message, err := conn.ReadMessage()
 			if err != nil {
+				fmt.Println("WebSocket read error:", err)
 				return
 			}
-			// Save to database
+			var msgData struct {
+				User string `json:"user"`
+				Text string `json:"text"`
+			}
+			if err := json.Unmarshal(message, &msgData); err != nil {
+				fmt.Println("JSON parse error:", err)
+				continue
+			}
 			msg := Message{
-				UserID:    "user", // Replace with actual user ID (e.g., from auth)
+				UserID:    msgData.User,
 				MsgID:     fmt.Sprintf("%d-%d", time.Now().UnixNano(), rand.Intn(1000)),
-				Text:      string(message),
+				Text:      msgData.Text,
 				CreatedAt: time.Now(),
 			}
 			if err := DB.Create(&msg).Error; err != nil {
+				fmt.Println("Database save error:", err)
 				continue
 			}
-			// Broadcast to all clients
 			Manager.Broadcast <- message
 		}
 	}()

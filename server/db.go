@@ -25,7 +25,7 @@ func ConnectDB() {
 
 	var database *gorm.DB
 	var err error
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		database, err = gorm.Open(postgres.Open(dsn), &gorm.Config{})
 		if err == nil {
 			sqlDB, err := database.DB()
