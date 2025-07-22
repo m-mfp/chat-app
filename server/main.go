@@ -6,6 +6,7 @@ import (
 	"math/rand"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gin-contrib/cors"
@@ -23,20 +24,23 @@ type WebSocketManager struct {
 	Broadcast  chan []byte
 	Register   chan *Client
 	Unregister chan *Client
+	Mutex      sync.Mutex
 }
 
 var Manager = WebSocketManager{
 	Clients:    make(map[*Client]bool),
-	Broadcast:  make(chan []byte),
-	Register:   make(chan *Client),
-	Unregister: make(chan *Client),
+	Broadcast:  make(chan []byte, 100),
+	Register:   make(chan *Client, 10),
+	Unregister: make(chan *Client, 10),
 }
 
 var upgrader = websocket.Upgrader{
 	ReadBufferSize:  1024,
 	WriteBufferSize: 1024,
 	CheckOrigin: func(r *http.Request) bool {
-		return true
+		return strings.HasPrefix(r.Header.Get("Origin"), "http://192.168.") ||
+			strings.HasPrefix(r.Header.Get("Origin"), "http://localhost:") ||
+			r.Header.Get("Origin") == "http://client:80"
 	},
 }
 
@@ -44,22 +48,29 @@ func (manager *WebSocketManager) Start() {
 	for {
 		select {
 		case client := <-manager.Register:
+			manager.Mutex.Lock()
 			manager.Clients[client] = true
-			fmt.Println("Client registered")
+			manager.Mutex.Unlock()
+			fmt.Println("Client registered, total clients:", len(manager.Clients))
 		case client := <-manager.Unregister:
+			manager.Mutex.Lock()
 			if _, ok := manager.Clients[client]; ok {
 				delete(manager.Clients, client)
-				fmt.Println("Client unregistered")
+				client.Conn.Close()
+				fmt.Println("Client unregistered, total clients:", len(manager.Clients))
 			}
+			manager.Mutex.Unlock()
 		case message := <-manager.Broadcast:
+			manager.Mutex.Lock()
 			for client := range manager.Clients {
 				err := client.Conn.WriteMessage(websocket.TextMessage, message)
 				if err != nil {
 					fmt.Println("Write error:", err)
-					client.Conn.Close()
 					delete(manager.Clients, client)
+					client.Conn.Close()
 				}
 			}
+			manager.Mutex.Unlock()
 		}
 	}
 }
@@ -73,7 +84,10 @@ func main() {
 
 	config := cors.Config{
 		AllowOriginFunc: func(origin string) bool {
-			return strings.HasPrefix(origin, "http://192.168.2.") || origin == "http://localhost:3000" || origin == "http://client:80"
+			fmt.Println("CORS origin check:", origin)
+			return strings.HasPrefix(origin, "http://192.168.") ||
+				strings.HasPrefix(origin, "http://localhost:") ||
+				origin == "http://client:80"
 		},
 		AllowMethods:     []string{"GET", "POST", "OPTIONS"},
 		AllowHeaders:     []string{"Origin", "Content-Type", "Accept", "Upgrade", "Connection"},
@@ -99,7 +113,6 @@ func main() {
 	})
 
 	router.POST("/api/messages", HandleMessages)
-
 	router.GET("/ws", HandleWebSocket)
 
 	router.Run(":8000")
@@ -145,7 +158,6 @@ func HandleWebSocket(c *gin.Context) {
 	go func() {
 		defer func() {
 			Manager.Unregister <- client
-			conn.Close()
 		}()
 		for {
 			_, message, err := conn.ReadMessage()
