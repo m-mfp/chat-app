@@ -8,8 +8,8 @@ const root = ReactDOM.createRoot(document.getElementById('root'));
 root.render(
   <React.StrictMode>
     <Auth0Provider
-      domain="real-time-chat-auth.eu.auth0.com" // Replace with your Auth0 domain
-      clientId="P8Zxfv4wmKlok21cXm0QWBO8jWUcmu2j" // Replace with your Auth0 client ID
+      domain="m-mfp.eu.auth0.com" // Replace with your Auth0 domain
+      clientId="G42PWQ6091p8n7xq8Owv9racl1JeOGpf" // Replace with your Auth0 client ID
       redirectUri={window.location.origin}
     >
       <App />

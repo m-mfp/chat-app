@@ -141,7 +141,7 @@ func HandleMessages(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to save message"})
 		return
 	}
-	Manager.Broadcast <- []byte(fmt.Sprintf(`{"user":"%s","text":"%s"}`, msg.UserID, msg.Text))
+	Manager.Broadcast <- []byte(fmt.Sprintf(`{"type":"message","user":"%s","text":"%s"}`, msg.UserID, msg.Text))
 	c.Status(http.StatusNoContent)
 }
 
@@ -166,24 +166,33 @@ func HandleWebSocket(c *gin.Context) {
 				return
 			}
 			var msgData struct {
+				Type string `json:"type"`
 				User string `json:"user"`
-				Text string `json:"text"`
+				Text string `json:"text,omitempty"`
 			}
 			if err := json.Unmarshal(message, &msgData); err != nil {
 				fmt.Println("JSON parse error:", err)
 				continue
 			}
-			msg := Message{
-				UserID:    msgData.User,
-				MsgID:     fmt.Sprintf("%d-%d", time.Now().UnixNano(), rand.Intn(1000)),
-				Text:      msgData.Text,
-				CreatedAt: time.Now(),
-			}
-			if err := DB.Create(&msg).Error; err != nil {
-				fmt.Println("Database save error:", err)
+			if msgData.Type == "typing" {
+				// Broadcast typing event without saving to DB
+				Manager.Broadcast <- []byte(fmt.Sprintf(`{"type":"typing","user":"%s"}`, msgData.User))
 				continue
 			}
-			Manager.Broadcast <- message
+			// Handle message type
+			if msgData.Type == "message" {
+				msg := Message{
+					UserID:    msgData.User,
+					MsgID:     fmt.Sprintf("%d-%d", time.Now().UnixNano(), rand.Intn(1000)),
+					Text:      msgData.Text,
+					CreatedAt: time.Now(),
+				}
+				if err := DB.Create(&msg).Error; err != nil {
+					fmt.Println("Database save error:", err)
+					continue
+				}
+				Manager.Broadcast <- message
+			}
 		}
 	}()
 }

@@ -6,8 +6,10 @@ function App() {
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState("");
   const [error, setError] = useState("");
+  const [typingUsers, setTypingUsers] = useState([]); // New state for typing users
   const messagesEndRef = useRef(null);
   const wsRef = useRef(null);
+  const typingTimeoutRef = useRef(null); // Ref to manage typing timeout
   const { loginWithRedirect, logout, user, isAuthenticated, getAccessTokenSilently } = useAuth0();
 
   // Store Auth0 token and username in localStorage
@@ -45,17 +47,33 @@ function App() {
           : process.env.REACT_APP_API_URL.replace("http", "ws") + "/ws";
       wsRef.current = new WebSocket(wsUrl);
 
-      wsRef.current.onopen = () => {};
+      wsRef.current.onopen = () => {
+        console.log("WebSocket connected");
+      };
 
       wsRef.current.onmessage = (event) => {
         try {
-          const { user, text } = JSON.parse(event.data);
-          const message = {
-            user,
-            id: `${Date.now()}-${Math.floor(Math.random() * 1000)}`,
-            text,
-          };
-          setMessages((prevMessages) => [...prevMessages, message].slice(-30));
+          const data = JSON.parse(event.data);
+          if (data.type === "message") {
+            const message = {
+              user: data.user,
+              id: `${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+              text: data.text,
+            };
+            setMessages((prevMessages) => [...prevMessages, message].slice(-30));
+          } else if (data.type === "typing") {
+            setTypingUsers((prev) => {
+              if (!prev.includes(data.user)) {
+                return [...prev, data.user];
+              }
+              return prev;
+            });
+            // Clear typing indicator after 2 seconds
+            clearTimeout(typingTimeoutRef.current);
+            typingTimeoutRef.current = setTimeout(() => {
+              setTypingUsers((prev) => prev.filter((u) => u !== data.user));
+            }, 2000);
+          }
         } catch (error) {
           setError("Failed to parse message");
         }
@@ -86,6 +104,14 @@ function App() {
     }
   }, [messages]);
 
+  // Handle typing event
+  const handleTyping = () => {
+    if (wsRef.current.readyState === WebSocket.OPEN) {
+      const username = user.nickname || user.email || "user";
+      wsRef.current.send(JSON.stringify({ type: "typing", user: username }));
+    }
+  };
+
   // Handle send message
   const handleSend = async (e) => {
     e.preventDefault();
@@ -98,7 +124,7 @@ function App() {
       return;
     }
     const username = user.nickname || user.email || "user";
-    const message = { user: username, text: input.trim() };
+    const message = { type: "message", user: username, text: input.trim() };
     wsRef.current.send(JSON.stringify(message));
     setInput("");
   };
@@ -142,6 +168,11 @@ function App() {
           </button>
         </div>
         {error && <p className="text-red-500 mb-4">{error}</p>}
+        {typingUsers.length > 0 && (
+          <p className="text-gray-500 mb-2">
+            {typingUsers.join(", ")} {typingUsers.length > 1 ? "are" : "is"} typing...
+          </p>
+        )}
         <div className="chat-box bg-white p-4 rounded-lg shadow-lg h-96 overflow-y-auto mb-4">
           {messages.map((msg) => (
             <div key={msg.id} className="chat-message mb-2">
@@ -155,7 +186,10 @@ function App() {
             type="text"
             placeholder="Type your message..."
             value={input}
-            onChange={(e) => setInput(e.target.value)}
+            onChange={(e) => {
+              setInput(e.target.value);
+              handleTyping();
+            }}
             className="flex-1 p-2 border rounded"
           />
           <button
